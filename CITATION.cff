@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+title: ml-market-prediction-study
+message: >-
+  If you use this software, please cite it using the metadata from this file.
+type: software
+authors:
+  - given-names: Aydin
+    family-names: Monavvari
+    email: 245710241+aydinmonavvari@users.noreply.github.com
+identifiers:
+  - type: url
+    value: "https://github.com/aydinmonavvari/ml-market-prediction-study"
+    description: GitHub repository
+repository-code: "https://github.com/aydinmonavvari/ml-market-prediction-study"
+url: "https://github.com/aydinmonavvari/ml-market-prediction-study"
+abstract: >-
+  A leakage-free, walk-forward research study asking whether machine learning
+  provides statistically significant incremental out-of-sample predictive
+  information for next-day equity index direction beyond simple baselines.
+  Includes an exact McNemar significance framework, a label-permutation sanity
+  control, and a cost-adjusted long/flat evaluation. Research software only --
+  not investment advice.
+keywords:
+  - machine learning
+  - empirical finance
+  - walk-forward validation
+  - data leakage
+  - efficient market hypothesis
+license: MIT
+version: v1.0.0
+date-released: "2026-10-08"

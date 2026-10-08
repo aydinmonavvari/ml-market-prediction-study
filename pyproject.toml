@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ml-market-prediction-study"
+version = "1.0.0"
+description = "Leakage-free walk-forward study of ML signal in next-day equity index direction (research, not a trading bot)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Aydin Monavvari", email = "245710241+aydinmonavvari@users.noreply.github.com" }]
+keywords = ["machine-learning", "finance", "walk-forward", "empirical-finance", "reproducibility"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+]
+dependencies = [
+  "pandas>=2.0",
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "statsmodels>=0.14",
+  "scikit-learn>=1.4",
+  "xgboost>=2.0",
+  "matplotlib>=3.8",
+  "yfinance>=0.2.40",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6",
+  "nbformat>=5.9",
+  "nbclient>=0.9",
+  "ipykernel>=6.29",
+  "seaborn>=0.13",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+  "B905", # zip() strictness not needed for the target versions
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+  "ignore::FutureWarning:yfinance",
+  "ignore::DeprecationWarning",
+]

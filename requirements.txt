@@ -1,0 +1,12 @@
+# Runtime dependencies (tested with the versions below on Python 3.12)
+pandas>=2.0          # 2.2.3
+numpy>=1.26          # 2.1.3
+scipy>=1.11          # 1.14.1
+statsmodels>=0.14    # 0.14.5 (McNemar test)
+scikit-learn>=1.4    # 1.5.2
+xgboost>=2.0         # 2.1.3
+matplotlib>=3.8      # 3.9.2
+yfinance>=0.2.40     # 1.7.0 (Yahoo Finance daily bars)
+PyYAML>=6.0          # 6.0.3 (configs/default.yaml)
+
+# Development: pytest, ruff, notebook tooling -> pip install -e .[dev]
