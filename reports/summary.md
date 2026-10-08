@@ -46,7 +46,20 @@ Best non-baseline model on holdout: **random_forest** (ROC-AUC 0.5022, accuracy 
 | xgboost             |               0.4736 |
 | mlp                 |               0.4994 |
 
-*Shuffled labels must yield AUC ~ 0.5; materially higher values would indicate leakage.*
+*Shuffled labels must yield AUC ~ 0.5; materially higher values would indicate target leakage. A single permutation run is a SANITY CHECK -- it can catch certain target-leakage bugs (features derived from the target) but is NOT a proof that no leakage exists; see also the leakage mutation test, which shows the walk-forward evaluation DOES inflate AUC when a known leak is injected.*
+
+## Holdout ROC-AUC -- stationary bootstrap 95% CI
+
+| model               |   auc_point |   ci_low |   ci_high |    B |   block_len |   seed |
+|:--------------------|------------:|---------:|----------:|-----:|------------:|-------:|
+| majority_baseline   |      0.5    |   0.5    |    0.5    | 2000 |          21 |     42 |
+| logistic_regression |      0.4856 |   0.4437 |    0.527  | 2000 |          21 |     42 |
+| random_forest       |      0.5022 |   0.4628 |    0.5445 | 2000 |          21 |     42 |
+| gradient_boosting   |      0.496  |   0.458  |    0.5364 | 2000 |          21 |     42 |
+| xgboost             |      0.4765 |   0.4338 |    0.5209 | 2000 |          21 |     42 |
+| mlp                 |      0.4981 |   0.4602 |    0.5361 | 2000 |          21 |     42 |
+
+*Politis-Romano stationary bootstrap, B=2000, expected block length 21 trading days, seed=42. Daily observations are serially dependent, so an IID bootstrap would be invalid; assumes approximate stationarity of the holdout window and weak dependence beyond ~1 month.*
 
 ## Cost-adjusted long/flat vs buy & hold (holdout only)
 
@@ -68,9 +81,18 @@ Best non-baseline model on holdout: **random_forest** (ROC-AUC 0.5022, accuracy 
 - `xgboost`: `{"learning_rate": 0.1, "max_depth": 3}` (mean fold balanced accuracy 0.4982)
 - `mlp`: `{"clf__alpha": 0.01}` (mean fold balanced accuracy 0.5049)
 
+## Class balance by split (exact)
+
+| model               |    n |   base_rate |
+|:--------------------|-----:|------------:|
+| base_rate_full      | 4193 |    0.552349 |
+| base_rate_cv_region | 3354 |    0.549493 |
+| base_rate_holdout   |  839 |    0.563766 |
+
 ## Caveats
 
 - No intraday fills; decisions at the close, applied to the next day's return; slippage ignored.
+- CV out-of-fold metrics cover only the 504 rows of the walk-forward test blocks (8 x 63d), not the full 3354-row CV region: the first rows of the CV region cannot be scored out-of-fold because the first fold requires >= 756 training days, and the 1-day embargo gaps are legitimately uncovered.
 - Single asset (SPY as S&P 500 proxy), single period, one random seed.
 - Hyperparameters were selected on the same walk-forward predictions reported as CV metrics -> CV numbers are mildly optimistic (selection/overfitting-the-CV bias); the holdout is the honest estimate.
 - This is a study, not investment advice.

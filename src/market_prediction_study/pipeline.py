@@ -13,7 +13,9 @@ Stages
 5. Refit each model with its best hyperparameters on the whole CV region;
    predict the holdout exactly once.
 6. Metrics + exact McNemar tests vs the majority baseline + Holm adjustment;
-   one-run label-permutation sanity control.
+   one-run label-permutation sanity control; stationary-bootstrap CIs for the
+   holdout ROC-AUC of every model (serially dependent daily data -- IID
+   bootstrap would be invalid).
 7. Cost-adjusted long/flat backtest vs buy-and-hold on the holdout only.
 8. Figures and reports (CSV + Markdown) with the ACTUAL numbers.
 """
@@ -29,6 +31,7 @@ from sklearn.metrics import balanced_accuracy_score
 
 from . import evaluation as ev
 from . import plots
+from .bootstrap import stationary_bootstrap_auc_ci
 from .config import StudyConfig
 from .data import load_dataset
 from .features import FEATURE_COLUMNS, build_model_matrices
@@ -170,7 +173,44 @@ def run_study(config: StudyConfig | None = None, save_outputs: bool = True) -> d
         }.items():
             m = ev.classification_metrics(yt, yp, ys)
             metric_rows.append({"model": name, "split": split, **m})
-    metrics = pd.DataFrame(metric_rows)
+
+    # Exact class balance per split, persisted so every quoted base rate is
+    # artifact-backed (``base_rate`` above covers only the rows a model is
+    # scored on; these rows cover the full sample and the whole CV region).
+    nan = float("nan")
+    base_rate_rows = [
+        {
+            "model": "base_rate_full",
+            "split": "full",
+            "accuracy": nan,
+            "balanced_accuracy": nan,
+            "roc_auc": nan,
+            "pr_auc": nan,
+            "n": float(n),
+            "base_rate": float(y.mean()),
+        },
+        {
+            "model": "base_rate_cv_region",
+            "split": "cv_region",
+            "accuracy": nan,
+            "balanced_accuracy": nan,
+            "roc_auc": nan,
+            "pr_auc": nan,
+            "n": float(len(y_cv)),
+            "base_rate": float(y_cv.mean()),
+        },
+        {
+            "model": "base_rate_holdout",
+            "split": "holdout",
+            "accuracy": nan,
+            "balanced_accuracy": nan,
+            "roc_auc": nan,
+            "pr_auc": nan,
+            "n": float(len(y_hold)),
+            "base_rate": float(y_hold.mean()),
+        },
+    ]
+    metrics = pd.DataFrame(metric_rows + base_rate_rows)
 
     base_pred = holdout_preds["majority_baseline"]
     mcnemar_rows = []
@@ -191,6 +231,21 @@ def run_study(config: StudyConfig | None = None, save_outputs: bool = True) -> d
         )
         perm_rows.append({"model": name, "auc_label_shuffled": auc})
     perm_tbl = pd.DataFrame(perm_rows)
+
+    # Stationary (Politis-Romano) bootstrap CIs for the holdout ROC-AUC.
+    # Daily observations are serially dependent, so an IID bootstrap is
+    # invalid; see bootstrap.py for rationale, assumptions and limitations.
+    boot_rows = []
+    for name in MODEL_ORDER:
+        res = stationary_bootstrap_auc_ci(
+            y_hold,
+            holdout_scores[name],
+            B=2000,
+            expected_block_len=21,
+            seed=seed,
+        )
+        boot_rows.append({"model": name, **res})
+    boot_tbl = pd.DataFrame(boot_rows)
 
     # -- 7. cost-adjusted long/flat backtest (holdout only) -------------------
     backtest_rows = []
@@ -242,7 +297,16 @@ def run_study(config: StudyConfig | None = None, save_outputs: bool = True) -> d
 
     # -- reports ---------------------------------------------------------------
     summary = build_summary(
-        config, X.index, metrics, mcnemar_tbl, perm_tbl, backtest_tbl, search_frames, n
+        config,
+        X.index,
+        metrics,
+        mcnemar_tbl,
+        perm_tbl,
+        backtest_tbl,
+        search_frames,
+        n,
+        boot_tbl=boot_tbl,
+        n_cv_rows=int(len(cv_idx)),
     )
 
     if save_outputs:
@@ -250,6 +314,9 @@ def run_study(config: StudyConfig | None = None, save_outputs: bool = True) -> d
         mcnemar_tbl.to_csv(config.reports_dir / "mcnemar.csv", index=False)
         perm_tbl.to_csv(config.reports_dir / "permutation_control.csv", index=False)
         backtest_tbl.to_csv(config.reports_dir / "backtest.csv", index=False)
+        boot_tbl[
+            ["model", "auc_point", "ci_low", "ci_high", "B", "block_len", "seed"]
+        ].to_csv(config.reports_dir / "auc_bootstrap.csv", index=False)
         pd.concat(
             [f.assign(model=name) for name, f in search_frames.items()]
         ).to_csv(config.reports_dir / "hp_search.csv", index=False)
@@ -266,6 +333,7 @@ def run_study(config: StudyConfig | None = None, save_outputs: bool = True) -> d
         "mcnemar": mcnemar_tbl,
         "permutation": perm_tbl,
         "backtest": backtest_tbl,
+        "auc_bootstrap": boot_tbl,
         "best_params": best_params,
         "summary_md": summary,
         "n_rows": n,
@@ -285,9 +353,14 @@ def build_summary(
     backtest_tbl: pd.DataFrame,
     search_frames: dict[str, pd.DataFrame],
     n_rows: int,
+    boot_tbl: pd.DataFrame | None = None,
+    n_cv_rows: int | None = None,
 ) -> str:
     """Render reports/summary.md from the ACTUAL results."""
-    hold = metrics[metrics["split"] == "holdout"].set_index("model")
+    hold = metrics[(metrics["split"] == "holdout") & metrics["model"].isin(MODEL_ORDER)].set_index(
+        "model"
+    )
+    base_rates = metrics[metrics["model"].str.startswith("base_rate_")].set_index("model")
     non_base = [m for m in MODEL_ORDER if m != "majority_baseline"]
     best_model = max(non_base, key=lambda m: hold.loc[m, "roc_auc"])
     best_auc = float(hold.loc[best_model, "roc_auc"])
@@ -412,9 +485,30 @@ def build_summary(
     lines.append(perm_tbl.round(4).to_markdown(index=False))
     lines.append("")
     lines.append(
-        "*Shuffled labels must yield AUC ~ 0.5; materially higher values would indicate leakage.*"
+        "*Shuffled labels must yield AUC ~ 0.5; materially higher values would indicate "
+        "target leakage. A single permutation run is a SANITY CHECK -- it can catch certain "
+        "target-leakage bugs (features derived from the target) but is NOT a proof that no "
+        "leakage exists; see also the leakage mutation test, which shows the walk-forward "
+        "evaluation DOES inflate AUC when a known leak is injected.*"
     )
     lines.append("")
+    if boot_tbl is not None and len(boot_tbl):
+        lines.append("## Holdout ROC-AUC -- stationary bootstrap 95% CI")
+        lines.append("")
+        lines.append(
+            boot_tbl[["model", "auc_point", "ci_low", "ci_high", "B", "block_len", "seed"]]
+            .round(4)
+            .to_markdown(index=False)
+        )
+        lines.append("")
+        lines.append(
+            f"*Politis-Romano stationary bootstrap, B={int(boot_tbl['B'].iloc[0])}, expected "
+            f"block length {int(boot_tbl['block_len'].iloc[0])} trading days, "
+            f"seed={int(boot_tbl['seed'].iloc[0])}. Daily observations are serially "
+            "dependent, so an IID bootstrap would be invalid; assumes approximate "
+            "stationarity of the holdout window and weak dependence beyond ~1 month.*"
+        )
+        lines.append("")
     lines.append("## Cost-adjusted long/flat vs buy & hold (holdout only)")
     lines.append("")
     lines.append(backtest_tbl.round(4).to_markdown(index=False))
@@ -428,12 +522,30 @@ def build_summary(
             f"(mean fold balanced accuracy {best['mean_bal_acc']:.4f})"
         )
     lines.append("")
+    lines.append("## Class balance by split (exact)")
+    lines.append("")
+    lines.append(
+        base_rates.reset_index()[["model", "n", "base_rate"]].round(6).to_markdown(index=False)
+    )
+    lines.append("")
     lines.append("## Caveats")
     lines.append("")
+    oof_n = int(
+        metrics[(metrics["split"] == "cv_oof") & metrics["model"].isin(MODEL_ORDER)]["n"].max()
+    )
+    cv_rows_txt = f"{n_cv_rows}-row" if n_cv_rows is not None else "CV-region"
+    coverage = (
+        f"- CV out-of-fold metrics cover only the {oof_n} rows of the walk-forward test "
+        f"blocks ({config.n_splits} x {config.test_days}d), not the full {cv_rows_txt} CV "
+        "region: the first rows of the CV region cannot be scored out-of-fold because the "
+        f"first fold requires >= {config.min_train_days} training days, and the {config.gap}-day "
+        "embargo gaps are legitimately uncovered.\n"
+    )
     lines.append(
         "- No intraday fills; decisions at the close, applied to the next day's return; "
         "slippage ignored.\n"
-        "- Single asset (SPY as S&P 500 proxy), single period, one random seed.\n"
+        + coverage
+        + "- Single asset (SPY as S&P 500 proxy), single period, one random seed.\n"
         "- Hyperparameters were selected on the same walk-forward predictions reported as CV "
         "metrics -> CV numbers are mildly optimistic (selection/overfitting-the-CV bias); the "
         "holdout is the honest estimate.\n"

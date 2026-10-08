@@ -9,7 +9,7 @@
 A leakage-free, walk-forward machine-learning study asking whether historical daily
 equity data contains *statistically significant incremental out-of-sample information*
 about next-day index direction — evaluated against honest baselines, formal significance
-tests, a label-permutation control, and a cost-adjusted backtest.
+tests, a label-permutation control, a leakage mutation test, and a cost-adjusted backtest.
 
 *Educational research study. Not investment advice. The headline finding is negative —
 and that is the point.*
@@ -41,7 +41,8 @@ result is a publishable, expected outcome rather than a disappointment.
   McNemar paired testing, Holm correction, and permutation controls — the toolkit that
   transfers directly to the later deep-learning study in this portfolio.
 - **Negative results are results.** Documenting *no significant signal* under a design
-  that cannot leak is scientifically more informative than an unsubstantiated positive.
+  engineered and unit-tested against the classical leakage failure modes is scientifically
+  more informative than an unsubstantiated positive.
 
 ## 5 · Methodology
 
@@ -59,7 +60,8 @@ result is a publishable, expected outcome rather than a disappointment.
    holdout.
 6. **Significance** — McNemar tests of each model vs the majority baseline on the
    holdout, with Holm (1979) step-down correction; label-permutation control (shuffled
-   labels must give AUC ≈ 0.5).
+   labels must give AUC ≈ 0.5); leakage mutation test (an injected leak must inflate the
+   walk-forward AUC); stationary-bootstrap confidence intervals for holdout ROC-AUC.
 7. **Economic evaluation** — next-day long/flat strategy vs buy-and-hold on the holdout
    only, with 10 bps cost per position switch.
 
@@ -72,7 +74,7 @@ result is a publishable, expected outcome rather than a disappointment.
 | Macro covariate | FRED DFF (effective federal funds rate, daily) |
 | Window | 2010-01-04 → 2026-10-07 download; 2010-02-04 → 2026-10-06 usable after warm-up |
 | Usable rows | 4,193 (features + aligned target) |
-| Class balance | Up days ≈ 55.2% (the majority baseline exploits this) |
+| Class balance | Up days (exact, `reports/metrics.csv`): **55.23% full sample** (2,316/4,193); 54.95% CV region (1,843/3,354); **56.38% holdout** (473/839); 50.20% over the 504 CV-OOF rows (the majority baseline exploits the holdout's 56.38%) |
 
 ## 7 · Data sources
 
@@ -117,10 +119,12 @@ reports/*.csv · summary.md · figures/
 | Shuffled splits | custom expanding walk-forward splitter; unit tests assert monotonic, non-overlapping, embargo-respecting folds |
 | Hyperparameter tuning on test data | grids searched inside walk-forward CV only; holdout evaluated once, after model selection |
 | Selecting on many correlated metrics | model selection uses one metric (balanced accuracy); Holm correction across McNemar comparisons; Bonferroni-style caution in interpretation |
-| Undetected leakage inflating AUC | label-permutation control: shuffled labels must produce AUC ≈ 0.5 (actual: 0.474–0.499) |
+| Undetected leakage inflating AUC | three complementary controls with distinct roles: (i) **label-permutation control** (one run — with labels destroyed by permutation the pipeline must return chance-level AUC ≈ 0.5, actual 0.474–0.499; a sanity check that can catch certain target-leakage bugs, i.e. features derived from the target, but **not** a proof that no leakage exists); (ii) **leakage mutation test** (`tests/test_mutation.py` — injects a known leak, a feature equal to the future label, and asserts the walk-forward AUC inflates to ≈ 1.0 while the clean pipeline stays ≈ 0.5, demonstrating the evaluation design *does* detect leaks when present); (iii) **scaler-isolation tests** (`tests/test_models.py` — scaling statistics are fit on training folds only). Combined: the design detects injected leaks, and the permutation control shows no evidence of leakage in the shipped pipeline; neither constitutes a formal proof of absence |
 
-**Walk-forward geometry:** 8 folds, 63 test days per fold, minimum 80 training days,
-1-day embargo (gap) between train and test blocks.
+**Walk-forward geometry:** 8 folds, 63 test days per fold, minimum 756 training days
+(≈ three trading years — the production setting in `config.py` / `configs/default.yaml`,
+enforced by the splitter's length validation; the first fold therefore trains on 2,849 rows
+≈ 2,850), 1-day embargo (gap) between train and test blocks.
 
 ## 10 · Models
 
@@ -141,7 +145,14 @@ All seeds pinned (`random_state = 42`).
   CV out-of-fold = model-selection view, mildly optimistic).
 - **McNemar's test** vs the majority baseline (exact binomial, two-sided) with **Holm
   step-down correction** across the five non-baseline models.
-- **Label-permutation control** (one run): shuffled labels must yield AUC ≈ 0.5.
+- **Label-permutation control** (one run): a *sanity check* — with labels destroyed by
+  permutation, the refit pipeline must yield AUC ≈ 0.5; it can catch certain
+  target-leakage bugs but is not a proof that no leakage exists (see the mutation test
+  above for the complementary positive control).
+- **Stationary (Politis–Romano) bootstrap CI** for the holdout ROC-AUC of every model:
+  B = 2,000 resamples, expected block length 21 trading days, seed 42, 95% percentile
+  intervals. Daily observations are serially dependent, so an IID bootstrap would be
+  invalid; the block resampling preserves dependence at lags below ~1 month.
 - **Cost-adjusted long/flat backtest** on the holdout: 10 bps per position switch,
   decisions at the close applied to next-day returns; reported against buy-and-hold.
 
@@ -149,7 +160,12 @@ All seeds pinned (`random_state = 42`).
 
 All numbers below are actual outputs of the committed run
 (`reports/metrics.csv`, `reports/mcnemar.csv`, `reports/backtest.csv`,
-[`reports/summary.md`](reports/summary.md)).
+`reports/auc_bootstrap.csv`, [`reports/summary.md`](reports/summary.md)).
+
+**Class balance by split (exact, persisted in `reports/metrics.csv`):** up-days are
+**55.23% of the full sample** (2,316/4,193), **56.38% of the holdout** (473/839) and
+50.20% of the 504 CV-OOF rows — every base rate quoted anywhere in this README refers to
+one of these labeled splits.
 
 **Holdout metrics (single evaluation, n = 839):**
 
@@ -182,6 +198,17 @@ expected outcome under near-form market efficiency.
 
 **Label-permutation control:** shuffled-label AUCs 0.474–0.499 across models — the
 pipeline shows no evidence of leakage (a leaking pipeline would show inflated AUC here).
+This is a one-run sanity check, not a proof; the complementary leakage mutation test
+(`tests/test_mutation.py`) confirms the same walk-forward evaluation *does* inflate to
+AUC ≈ 1.0 when a known leak is injected.
+
+**Uncertainty quantification (stationary bootstrap, holdout ROC-AUC):** daily
+observations are serially dependent, so an IID bootstrap would be invalid; 95%
+percentile CIs use the Politis–Romano stationary bootstrap (B = 2,000, expected block
+length 21 trading days, seed 42). **The CIs include 0.5 for every model** — e.g. random
+forest 0.502 [0.463, 0.545], logistic regression 0.486 [0.444, 0.527], XGBoost 0.476
+[0.434, 0.521] — consistent with no directional signal. Full table:
+[`reports/auc_bootstrap.csv`](reports/auc_bootstrap.csv).
 
 **Cost-adjusted long/flat vs buy-and-hold (holdout):** buy-and-hold returned **+92.7%**;
 every model's strategy underperformed after 10 bps costs — random forest +59.5%
@@ -189,7 +216,10 @@ every model's strategy underperformed after 10 bps costs — random forest +59.5
 *negative* (−8.2% / −8.4%, 305/332 switches, ~30–33% eaten by costs).
 
 **CV out-of-fold (model-selection view):** all models' balanced accuracy 0.497–0.510,
-AUC 0.479–0.495 — no fold-level signal either.
+AUC 0.479–0.495 — no fold-level signal either. Note the coverage: CV-OOF metrics are
+computed on the **504 rows of the 8×63-day walk-forward test blocks only**, not on all
+3,354 CV rows — the earliest CV rows cannot be scored out-of-fold (the first fold needs
+≥ 756 training days) and the 1-day embargo gaps are legitimately uncovered.
 
 Figures (generated from the actual run): [`equity_curves.png`](figures/equity_curves.png)
 (strategy vs buy-and-hold), [`roc_pr_curves.png`](figures/roc_pr_curves.png),
@@ -202,8 +232,9 @@ dominated by recent-return lags and volatility, with no stable ranking across fo
 
 1. **No exploitable directional signal was found — and the design makes that finding
    trustworthy.** Every safeguard (walk-forward, embargo, pipeline-internal scaling,
-   permutation control) is in place, and the models still cannot beat "always predict
-   up" (which wins simply because up-days are 54.6% of the sample).
+   permutation control, leakage mutation test) is in place, and the models still cannot
+   beat "always predict up" (which wins on the holdout simply because up-days are 56.4%
+   of the holdout sample — 473/839; 55.23% of the full sample).
 2. **The one "significant" result is a significant *failure*.** Gradient boosting's
    Holm-adjusted p = 0.011 reflects *worse*-than-baseline accuracy (0.493 vs 0.564) —
    the flexible model learned patterns that anti-correlated with the holdout period.
@@ -230,8 +261,14 @@ dominated by recent-return lags and volatility, with no stable ranking across fo
   find signal*, not whether any possible configuration could.
 - **Linear technical features.** No order-book, options-implied, or alternative data;
   features are standard daily indicators available at the close.
-- **One permutation run.** The control is a sanity check, not a full permutation test
-  distribution.
+- **One permutation run.** The label-permutation control is a sanity check, not a full
+  permutation test distribution — and no single-run control can *prove* the absence of
+  leakage. The complementary leakage mutation test demonstrates the evaluation design
+  detects injected leaks; together they bound what the negative result means.
+- **Bootstrap CI assumptions.** The stationary-bootstrap intervals assume approximate
+  stationarity of the holdout window and weak dependence beyond the 21-day expected block
+  length; they quantify sampling uncertainty on this one path only, and interval widths
+  can be sensitive to the block-length choice.
 - **Multiple metrics inspected.** Even with Holm correction on McNemar and one selection
   metric, reading many tables invites selection bias; interpretations are written with
   that in mind.
@@ -249,7 +286,7 @@ python scripts/download_data.py
 # 3) full study (~5 min on 4 cores; deterministic, seed = 42)
 python scripts/run_study.py
 
-# 4) verify: lint + 30 offline unit tests (incl. the leakage test)
+# 4) verify: lint + 34 offline unit tests (incl. the leakage and mutation tests)
 ruff check .
 pytest -q
 ```
@@ -313,14 +350,15 @@ ml-market-prediction-study/
 │   ├── validation.py    # expanding walk-forward + embargo, holdout split
 │   ├── models.py        # seeds-pinned estimators, grids, fit/predict helpers
 │   ├── evaluation.py    # metrics, exact McNemar, Holm, cost-adjusted backtest
+│   ├── bootstrap.py     # stationary (Politis-Romano) bootstrap CI for holdout AUC
 │   ├── plots.py         # equity curves, ROC/PR, fold diagram, importances
 │   └── pipeline.py      # end-to-end study orchestration + summary writer
-├── tests/               # 30 offline tests incl. the temporal-leakage test
+├── tests/               # 34 offline tests incl. the temporal-leakage + mutation tests
 ├── notebooks/           # feature/label EDA
 ├── scripts/             # download_data.py, run_study.py
 ├── configs/default.yaml
 ├── data/raw · data/processed   # git-ignored caches (.gitkeep tracked)
-├── reports/             # metrics/backtest/mcnemar CSVs, summary.md (generated)
+├── reports/             # metrics/backtest/mcnemar/auc_bootstrap CSVs, summary.md (generated)
 ├── figures/             # 5 generated figures (committed)
 ├── docs/research_report.md
 └── .github/workflows/ci.yml

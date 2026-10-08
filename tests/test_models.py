@@ -98,8 +98,20 @@ def test_end_to_end_pipeline_offline(tmp_path, small_config):
 
     assert results["n_rows"] > 100
     metrics = results["metrics"]
-    assert set(metrics["split"]) == {"cv_oof", "holdout"}
-    assert set(metrics["model"]) == set(MODEL_ORDER)
+    assert {"cv_oof", "holdout"} <= set(metrics["split"])  # base-rate rows add "full"/"cv_region"
+    assert set(MODEL_ORDER) <= set(metrics["model"])  # plus base_rate_* rows
+    # exact class-balance rows are persisted alongside the model metrics
+    base_rows = metrics[metrics["model"].str.startswith("base_rate_")]
+    assert set(base_rows["model"]) == {"base_rate_full", "base_rate_cv_region", "base_rate_holdout"}
+    for _, row in base_rows.iterrows():
+        assert 0.0 <= row["base_rate"] <= 1.0
+        assert row["n"] > 0
+
+    # stationary-bootstrap CIs: ordered, seed/block settings recorded
+    boot = results["auc_bootstrap"]
+    assert set(boot["model"]) == set(MODEL_ORDER)
+    assert (boot["ci_low"] <= boot["ci_high"]).all()
+    assert boot["B"].eq(2000).all() and boot["block_len"].eq(21).all() and boot["seed"].eq(42).all()
 
     mcn = results["mcnemar"]
     assert len(mcn) == len(MODEL_ORDER) - 1
@@ -116,6 +128,7 @@ def test_end_to_end_pipeline_offline(tmp_path, small_config):
         "backtest.csv",
         "hp_search.csv",
         "holdout_predictions.csv",
+        "auc_bootstrap.csv",
         "summary.md",
     ):
         assert (small_config.reports_dir / fname).exists()
