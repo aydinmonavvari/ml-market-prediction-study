@@ -1,0 +1,7 @@
+model,auc_label_shuffled
+majority_baseline,0.5
+logistic_regression,0.49153178756686194
+random_forest,0.48751140840351664
+gradient_boosting,0.4849524601716748
+xgboost,0.4736307027576566
+mlp,0.49944546494298686
