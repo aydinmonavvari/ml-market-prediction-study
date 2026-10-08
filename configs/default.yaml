@@ -1,0 +1,19 @@
+# Default study configuration.
+# All values can be inspected against src/market_prediction_study/config.py.
+
+symbol: SPY
+start: "2010-01-01"
+end: null            # null = up to the most recent close available
+
+# Validation geometry (expanding-window walk-forward)
+holdout_frac: 0.20   # chronologically last 20% = untouched holdout
+n_splits: 8
+test_days: 63        # ~ one quarter per test block
+min_train_days: 756  # ~ three years minimum training history
+gap: 1               # 1-day embargo between train and test blocks
+
+# Economic evaluation
+cost_bps: 10.0       # transaction cost per position switch, in basis points
+
+seed: 42
+min_rows: 1000       # guard: refuse to run on absurdly small samples
